@@ -1,3 +1,5 @@
 streamlit
-google-genai
+google-generativeai
+gtts
+requests
 python-dotenv
