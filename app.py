@@ -1,13 +1,17 @@
 # ============================================================
 # FINAL MASTER CODE – SAKURA ASSIST v2.5 (PRODUCTION COMPLETE)
 # All safety fixes applied:
-#   • Thread‑safe database (new connection per operation)
+#   • Thread-safe database (new connection per operation)
 #   • PII redaction before storage
 #   • Prefecture typo corrected (Shizuoka)
 #   • Fallback keys normalized (comfort_message)
 #   • Deprecated balloons → modern toast (with legacy fallback)
 #   • gTTS import handled gracefully
-#   • Deadline null‑safety
+#   • Deadline null-safety
+#   • Single PIIGuard class (duplicate removed)
+#   • PIIGuard used as instance, not class
+#   • has_pii() method added
+#   • verify_pin() function defined
 # ============================================================
 
 import streamlit as st
@@ -36,14 +40,16 @@ try:
     load_dotenv()
 except ImportError:
     pass
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6I1vVt0083y77pnxfQZdKE59Sdd7Q_5bbLEPBvmphXmxA")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 _DEFAULT_PIN_HASH = hashlib.sha256("2026".encode()).hexdigest()
 FAMILY_PIN_HASH = os.getenv("FAMILY_PIN_HASH", _DEFAULT_PIN_HASH)
 
 if FAMILY_PIN_HASH == _DEFAULT_PIN_HASH and not os.getenv("FAMILY_PIN_HASH"):
     if "pin_warning_shown" not in st.session_state:
         st.session_state.pin_warning_shown = True
-        st.warning("🔒 Using default PIN (2026).")
+        st.warning("🔒 Using default PIN (2026). Set FAMILY_PIN_HASH env var for production.")
+
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_TO_USER_ID = os.getenv("LINE_TO_USER_ID", "")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
@@ -51,6 +57,16 @@ FAMILY_EMAIL = os.getenv("FAMILY_EMAIL", "")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "./sakura_history.db")
 ENABLE_TTS = os.getenv("ENABLE_TTS", "true").lower() == "true"
 ENABLE_IMAGE_OCR = os.getenv("ENABLE_IMAGE_OCR", "true").lower() == "true"
+
+# ============================================================
+# PIN VERIFICATION
+# ============================================================
+def verify_pin(pin: str) -> bool:
+    return hashlib.sha256(pin.encode()).hexdigest() == FAMILY_PIN_HASH
+
+# ============================================================
+# DATABASE LAYER
+# ============================================================
 class SakuraDB:
     """Every method opens its own connection → safe for concurrent usage."""
 
@@ -111,7 +127,6 @@ class SakuraDB:
         finally:
             conn.close()
 
-# Cached resource returns the class – no persistent connection
 @st.cache_resource
 def get_db():
     return SakuraDB
@@ -119,58 +134,59 @@ def get_db():
 # ============================================================
 # COMPLIANCE INTERCEPTOR (PRIVACY PROTECTION LAYER)
 # ============================================================
-# Force clean dark theme and override stubborn text/label sizes
 st.markdown(
     """
     <style>
-    /* 1. Change main app background away from pink to clean slate dark */
     .stApp, [data-testid="stSidebar"] {
         background-color: #121214 !important;
     }
-    
-    /* 2. Scale up all standard input text area font sizes */
     .stTextArea textarea, .stTextInput input {
         font-size: 18px !important;
     }
-    
-    /* 3. Force sidebar labels and paragraph descriptions to be larger */
     label, p, .stMarkdown p {
         font-size: 18px !important;
     }
-    
-    /* 4. Increase subheader text sizes */
     h3, [data-testid="stSubheader"] {
         font-size: 24px !important;
     }
     </style>
     """,
     unsafe_allow_html=True
-    )
-
-    class PIIGuard: 
-    PATTERNS = {
-        'my_number': re.compile(r'\b\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b'),
-        'phone': re.compile(r'\b(0\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{4})\b'),
-        'postal': re.compile(r'\b\d{3}[-.\s]?\d{4}\b'),
-        'address': re.compile(r'([一-龥]{2,5}(?:都|道|府|県)[一-龥]{1,10}(?:市|区|町|村)[一-龥\d]{1,20}(?:丁目|番地|号)[\d\-]*)\b'),
-        'email': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
-    }
-
-    @classmethod
-    def redact(cls, text: str) -> str:
-        if not text:
-            return text
-        redacted = text
-        for name, pattern in cls.PATTERNS.items():
-            redacted = pattern.sub(f"[REDACTED-{name.upper()}]", redacted)
-        return redacted
-
-    @classmethod
-    def has_pii(cls, text: str) -> bool:
-        return any(p.search(text) for p in cls.PATTERNS.values())
+)
 
 # ============================================================
-# OFFLINE PARSING DECOUPLING SUB-PARADIGMS
+# PII GUARD — SINGLE DEFINITION (fixes duplicate + bugs)
+# ============================================================
+class PIIGuard:
+    def __init__(self):
+        self.patterns = {
+            # Japanese My Number: 12 digits (e.g. 1234 5678 1234)
+            'my_number': re.compile(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'),
+            # Email
+            'email': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'),
+            # Phone: Japanese style
+            'phone': re.compile(r'\b\d{2,4}[-\s]?\d{2,4}[-\s]?\d{3,4}\b'),
+            # Postal code
+            'postal': re.compile(r'\b\d{3}[-\s]?\d{4}\b'),
+        }
+
+    def has_pii(self, text: str) -> bool:
+        """Returns True if any PII pattern is found in text."""
+        return any(p.search(text) for p in self.patterns.values())
+
+    def redact(self, text: str) -> str:
+        """Replaces all PII matches with [TYPE REDACTED] tokens."""
+        if not text:
+            return text
+        for pii_type, pattern in self.patterns.items():
+            text = pattern.sub(f"[{pii_type.upper()} REDACTED]", text)
+        return text
+
+# Single shared instance used throughout the app
+pii_guard = PIIGuard()
+
+# ============================================================
+# OFFLINE FALLBACK TEMPLATES
 # ============================================================
 FALLBACK_TEMPLATES = [
     {
@@ -252,7 +268,7 @@ def format_fallback(fb, lang):
         "urgency_level": "medium",
         "deadline": None,
         "actions": [
-            {"step_number": i+1, "task": a, "deadline": None, "contact": None}
+            {"step_number": i + 1, "task": a, "deadline": None, "contact": None}
             for i, a in enumerate(fb["actions"])
         ],
         "department": "City Hall" if not is_jp else "市役所",
@@ -262,7 +278,7 @@ def format_fallback(fb, lang):
     }
 
 # ============================================================
-# CLOUD INTERFACE DISPATCH PIPELINE
+# FAMILY NOTIFIER
 # ============================================================
 class FamilyNotifier:
     def __init__(self):
@@ -310,7 +326,7 @@ class FamilyNotifier:
         return results
 
 # ============================================================
-# GEMINI CORE INFERENCE CONTROLLER
+# GEMINI AI TRANSLATOR
 # ============================================================
 try:
     import google.generativeai as genai
@@ -332,7 +348,8 @@ class SakuraTranslator:
         if not self.available:
             return {"success": True, "data": format_fallback(get_fallback(text), lang), "source": "offline"}
 
-        safe_text = PIIGuard.redact(text)
+        # Redact PII before sending to AI
+        safe_text = pii_guard.redact(text)
 
         prompt = f"""You are 'Sakura Assist', an empathetic AI translator for elderly people living alone in Japan.
 The user is extremely stressed by complex government paperwork.
@@ -400,7 +417,7 @@ Prefecture: {prefecture}
             return {"success": False, "error": str(e), "source": "error"}
 
 # ============================================================
-# COMPASSIONATE UX STYLING LAYERS
+# UI STYLING
 # ============================================================
 st.markdown("""
     <style>
@@ -429,16 +446,16 @@ st.markdown("""
         50%  { transform: translateY(50vh) rotate(180deg) translateX(40px); opacity: 0.3; }
         100% { transform: translateY(110vh) rotate(360deg) translateX(-20px); opacity: 0; }
     }
-    .p1  { left: 5%;  animation-duration: 8s; animation-delay: 0s; }
-    .p2  { left: 15%; animation-duration: 10s; animation-delay: 1s; font-size: 20px; }
-    .p3  { left: 25%; animation-duration: 9s; animation-delay: 2s; font-size: 14px; }
+    .p1  { left: 5%;  animation-duration: 8s;  animation-delay: 0s; }
+    .p2  { left: 15%; animation-duration: 10s; animation-delay: 1s;   font-size: 20px; }
+    .p3  { left: 25%; animation-duration: 9s;  animation-delay: 2s;   font-size: 14px; }
     .p4  { left: 35%; animation-duration: 11s; animation-delay: 0.5s; }
-    .p5  { left: 45%; animation-duration: 8s; animation-delay: 3s; font-size: 22px; }
+    .p5  { left: 45%; animation-duration: 8s;  animation-delay: 3s;   font-size: 22px; }
     .p6  { left: 55%; animation-duration: 10s; animation-delay: 1.5s; }
-    .p7  { left: 65%; animation-duration: 9s; animation-delay: 2.5s; }
-    .p8  { left: 75%; animation-duration: 8s; animation-delay: 4s; font-size: 14px; }
+    .p7  { left: 65%; animation-duration: 9s;  animation-delay: 2.5s; }
+    .p8  { left: 75%; animation-duration: 8s;  animation-delay: 4s;   font-size: 14px; }
     .p9  { left: 85%; animation-duration: 11s; animation-delay: 0.8s; }
-    .p10 { left: 93%; animation-duration: 9s; animation-delay: 3.5s; }
+    .p10 { left: 93%; animation-duration: 9s;  animation-delay: 3.5s; }
     @media (max-width: 768px) {
         .main-title { font-size: 24px !important; }
         .card-grandma, .card-action { padding: 14px !important; }
@@ -457,7 +474,9 @@ st.markdown("""
     <div class="petal p10">🌺</div>
 """, unsafe_allow_html=True)
 
-# ==================== STATE INITIALIZATION ====================
+# ============================================================
+# SESSION STATE INITIALIZATION
+# ============================================================
 if 'db' not in st.session_state:
     st.session_state.db = get_db()
 if 'notifier' not in st.session_state:
@@ -471,13 +490,15 @@ if 'audio_html' not in st.session_state:
 if 'font_size' not in st.session_state:
     st.session_state.font_size = "normal"
 
-# ==================== SIDEBAR BRAND LAYERS ====================
+# ============================================================
+# SIDEBAR
+# ============================================================
 with st.sidebar:
     st.markdown("## 🌸 Sakura Assist v2.5")
     st.markdown("---")
 
-    st.markdown("### 🔤 Text Size Optimization")
-    font_choice = st.radio("Size Selection:", ["Normal", "Large", "Extra Large"], horizontal=True)
+    st.markdown("### 🔤 Text Size")
+    font_choice = st.radio("Size:", ["Normal", "Large", "Extra Large"], horizontal=True)
     st.session_state.font_size = font_choice.lower().replace(" ", "_")
 
     size_css = {
@@ -485,14 +506,17 @@ with st.sidebar:
         "large": "font-size: 20px !important;",
         "extra_large": "font-size: 24px !important;"
     }
-    st.markdown(f"<style>.big-font {{{size_css.get(st.session_state.font_size, '')}}}</style>", unsafe_allow_html=True)
+    st.markdown(
+        f"<style>.big-font {{{size_css.get(st.session_state.font_size, '')}}}</style>",
+        unsafe_allow_html=True
+    )
 
     st.markdown("---")
-    st.markdown("### 🌐 Evaluation Language Settings")
+    st.markdown("### 🌐 Language")
     lang = st.radio("Language Mode:", ["English", "日本語 (Simple Japanese)"], key="lang")
 
     st.markdown("---")
-    st.markdown("### 🗾 Prefecture Matrix Selector")
+    st.markdown("### 🗾 Prefecture")
     prefectures = [
         "🗾 National Network (Auto)",
         "Hokkaido (北海道)", "Aomori (青森県)", "Iwate (岩手県)", "Miyagi (宮城県)",
@@ -508,20 +532,19 @@ with st.sidebar:
         "Fukuoka (福岡県)", "Nagasaki (長崎県)", "Kumamoto (熊本県)", "Oita (大分県)",
         "Miyazaki (宮崎県)", "Kagoshima (鹿児島県)", "Saga (佐賀県)", "Okinawa (沖縄県)"
     ]
-    selected_prefecture = st.selectbox("Active Prefectural Node:", prefectures)
+    selected_prefecture = st.selectbox("Prefecture:", prefectures)
 
     st.markdown("---")
 
-    # Secure Backup Key Interceptor Mode
     key_override = ""
     if not GEMINI_API_KEY:
-        st.markdown("### 🔑 Live System Override")
-        key_override = st.text_input("Enter Gemini API Key for Testing:", type="password")
+        st.markdown("### 🔑 API Key Override")
+        key_override = st.text_input("Enter Gemini API Key:", type="password")
 
-    # Initialize translator dynamically
+    # Initialize translator
     st.session_state.translator = SakuraTranslator(key_override=key_override)
 
-    st.markdown("### 📊 Local System Ledger History")
+    st.markdown("### 📊 Recent History")
     try:
         history = st.session_state.db.get_history(limit=5)
         for h in history:
@@ -536,66 +559,69 @@ with st.sidebar:
         pass
 
     st.markdown("---")
-    st.markdown("### 🔬 System Architecture Specs")
-    st.info("Society 5.0 Implementation Layer addressing demographic inversion. Engineered for USAII Competition Framework.")
+    st.info("Society 5.0 | Built for USAII 2026")
 
-# ==================== STRINGS DIRECTORY ====================
+# ============================================================
+# STRINGS
+# ============================================================
 text_db = {
     "English": {
-        "title": "🌸 Sakura Assist — National Crisis-to-Action Framework",
-        "sync": f"🟢 System Node Active: Connected to {selected_prefecture} Public Welfare Cloud Matrix | {datetime.now().strftime('%B %d, %Y')}",
-        "profile": "👵 Home Portal (Elder-Optimized View)",
-        "input_label": "📄 Position or paste confusing municipal notice document text here:",
-        "or_upload": "📷 Or upload a photograph copy of the notice document:",
-        "btn": "✨ Process NLP Crisis-to-Action Translation",
-        "output_hdr": "🤖 AI Action Hub System Output",
-        "validation_err": "❌ Input Validation Error: Clear text strings or source binaries required.",
-        "api_err": "⚠️ Security Credentials Unconfigured. Please verify system execution environment tokens.",
-        "loop_title": "🛡️ Responsible AI — Interactive Verification Gateway",
-        "loop_desc": "Translation context compiled. Secure pass token confirmation required to update Family Smartphone Hub.",
-        "tts_label": "🔊 Ambient Audio Text-to-Speech Output Engine",
-        "deadline": "Enforcement Deadline",
-        "department": "Responsible Bureau",
-        "contact": "Assigned Helpdesk Line",
-        "docs_needed": "Required Verifiable Credentials",
-        "penalty": "Systemic Risk Factor If Missed",
-        "verified": "✅ Secure clearance granted! Transmitting encrypted log packets to Family Hub...",
-        "wrong_pin": "❌ Verification token mismatch. Transmission link blocked.",
-        "demo_mode": "📲 [SIMULATION PAYLOAD] Formatted message dispatch:"
+        "title": "🌸 Sakura Assist — Your Document Helper",
+        "sync": f"🟢 Connected to {selected_prefecture} | {datetime.now().strftime('%B %d, %Y')}",
+        "profile": "👵 Home Portal",
+        "input_label": "📄 Paste the confusing letter text here:",
+        "or_upload": "📷 Or upload a photo of the letter:",
+        "btn": "✨ Translate & Explain",
+        "output_hdr": "🤖 Here is what the letter means",
+        "validation_err": "❌ Please paste some text or upload a photo first.",
+        "api_err": "⚠️ AI key not configured. Please enter your Gemini API key in the sidebar.",
+        "loop_title": "🛡️ Send to Family",
+        "loop_desc": "Enter your family PIN to send this summary to their phone.",
+        "tts_label": "🔊 Listen to the summary",
+        "deadline": "Deadline",
+        "department": "Office",
+        "contact": "Phone Number",
+        "docs_needed": "Documents Needed",
+        "penalty": "What happens if missed",
+        "verified": "✅ PIN correct! Sending to family now...",
+        "wrong_pin": "❌ Wrong PIN. Message not sent.",
+        "demo_mode": "📲 [DEMO] Message that would be sent:"
     },
     "日本語 (Simple Japanese)": {
-        "title": "🌸 さくら アシスト — 全国 かんたん あんしん ほんやく",
-        "sync": f"🟢 システム かどうちゅう: {selected_prefecture} の まどぐち と つながっています | {datetime.now().strftime('%Y年%m月%d日')}",
-        "profile": "👵 おばあちゃん の がめん (あんしん 大きな文字表示)",
-        "input_label": "📄 やくしょ から とどいた むずかしい 手紙 の もじ を ここにいれてね:",
+        "title": "🌸 さくら アシスト — かんたん てがみ ほんやく",
+        "sync": f"🟢 {selected_prefecture} と つながっています | {datetime.now().strftime('%Y年%m月%d日')}",
+        "profile": "👵 おばあちゃん の がめん",
+        "input_label": "📄 むずかしい 手紙 の もじ を ここにいれてね:",
         "or_upload": "📷 手紙 の 写真 を アップロード:",
-        "btn": "✨ さくらAI で かんたんに なるほど",
-        "output_hdr": "🤖 さくらAI からの おしらせ がめん",
-        "validation_err": "❌ エラー: もじ または 写真 を えらんで いれてください。",
-        "api_err": "⚠️ エラー: AIの せっていキー が みつかりません。",
-        "loop_title": "🛡️ あんしん まもり まもりゲートウェイ (ご家族かくにん)",
-        "loop_desc": "かんたん ほんやくが できました。内容を 家族のスマートフォンへ 送るには、確認用の ばんごう を 入力してください。",
-        "tts_label": "🔊 やさしい こえ で きく (おんせい 出力)",
-        "deadline": "いつまで（期限）",
-        "department": "おくる ところ（担当窓口）",
-        "contact": "きくところ（電話番号）",
-        "docs_needed": "じゅんび する もの（必要書類）",
-        "penalty": "ださないと どうなる？（不利益リスク）",
-        "verified": "✅ 家族かくにん できました！すぐに スマホへ おくります...",
-        "wrong_pin": "❌ 確認ばんごう が ちがいます。送るのを 中止しました。",
-        "demo_mode": "📲 [デモモード表示] 家族の スマホに おくられる メッセージ:"
+        "btn": "✨ さくらAI で かんたんに",
+        "output_hdr": "🤖 てがみ の いみ",
+        "validation_err": "❌ もじ または 写真 を いれてください。",
+        "api_err": "⚠️ AIの キー が みつかりません。",
+        "loop_title": "🛡️ かぞく に おくる",
+        "loop_desc": "かぞく の ばんごう を いれてください。",
+        "tts_label": "🔊 こえ で きく",
+        "deadline": "いつまで",
+        "department": "どこ",
+        "contact": "でんわ",
+        "docs_needed": "じゅんびするもの",
+        "penalty": "ださないと どうなる",
+        "verified": "✅ おくりました！",
+        "wrong_pin": "❌ ばんごう が ちがいます。",
+        "demo_mode": "📲 [デモ] おくられる メッセージ:"
     }
 }
 db = text_db[lang]
 
-# ==================== APPLICATION FRONTEND INTERFACE ====================
+# ============================================================
+# MAIN UI
+# ============================================================
 st.markdown(f"<div class='main-title'>{db['title']}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='sync-text'>{db['sync']}</div>", unsafe_allow_html=True)
 st.markdown("<div class='sakura-divider'>🌸 🌺 🌸 🌺 🌸</div>", unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 1], gap="large")
 
-# ==================== PORTAL INPUT PANEL (LEFT) ====================
+# ==================== LEFT: INPUT PANEL ====================
 with col1:
     st.markdown("<div class='card-grandma'>", unsafe_allow_html=True)
     st.subheader(db["profile"])
@@ -607,18 +633,19 @@ with col1:
     if ENABLE_IMAGE_OCR:
         uploaded_image = st.file_uploader(db["or_upload"], type=["jpg", "jpeg", "png"])
         if uploaded_image:
-            st.image(uploaded_image, use_container_width=True, caption="📷 Document Image Source Stream")
+            st.image(uploaded_image, use_container_width=True, caption="📷 Uploaded document")
 
     st.markdown("<div class='touch-btn'>", unsafe_allow_html=True)
     process_trigger = st.button(db["btn"], use_container_width=True, type="primary")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if user_input and PIIGuard.has_pii(user_input):
-        st.warning("🔒 Compliance Interceptor Notification: PII attributes filtered and localized safely before inference transfer.")
+    # ✅ FIX: use pii_guard instance, not PIIGuard class
+    if user_input and pii_guard.has_pii(user_input):
+        st.warning("🔒 Personal information detected and will be hidden before processing.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ==================== PORTAL ACTION HUB PANEL (RIGHT) ====================
+# ==================== RIGHT: OUTPUT PANEL ====================
 with col2:
     st.markdown("<div class='card-action'>", unsafe_allow_html=True)
     st.subheader(db["output_hdr"])
@@ -631,7 +658,7 @@ with col2:
             st.error(db["api_err"])
             st.session_state.last_result = None
         else:
-            with st.spinner("🌸 Sakura AI Architecture parsing matrix endpoints..."):
+            with st.spinner("🌸 Sakura AI is reading the letter..."):
                 if uploaded_image:
                     img_bytes = uploaded_image.getvalue()
                     mime_type = uploaded_image.type or "image/jpeg"
@@ -643,8 +670,8 @@ with col2:
 
                 if result["success"]:
                     data = result["data"]
-                    # 🔒 Privacy: redact raw input before storing
-                    safe_raw = PIIGuard.redact(user_input[:500]) if user_input else "[IMAGE BINARY DATA STREAM]"
+                    # ✅ FIX: use pii_guard instance
+                    safe_raw = pii_guard.redact(user_input[:500]) if user_input else "[IMAGE]"
                     try:
                         doc_id = st.session_state.db.save(
                             prefecture=selected_prefecture,
@@ -661,7 +688,7 @@ with col2:
 
                 st.session_state.audio_html = None
                 if ENABLE_TTS and result["success"]:
-                    with st.spinner("🔊 Initializing text-to-speech rendering pipeline..."):
+                    with st.spinner("🔊 Generating audio..."):
                         try:
                             from gtts import gTTS
                             comfort = result["data"].get("comfort_message", "")
@@ -678,30 +705,30 @@ with col2:
                                 </audio>
                             '''
                         except ImportError:
-                            st.warning("⚠️ `gtts` library not installed. Audio disabled.")
+                            st.warning("⚠️ `gtts` not installed. Audio disabled.")
                             st.session_state.audio_html = None
                         except Exception:
                             st.session_state.audio_html = None
 
-    # RENDER PIPELINE INFERENCE OBJECT MANIFESTS
+    # RENDER RESULTS
     if st.session_state.last_result:
         result = st.session_state.last_result
         if not result["success"]:
-            st.error(f"❌ Core System Exception: {result.get('error', 'Unknown breakdown.')}")
+            st.error(f"❌ Error: {result.get('error', 'Unknown error.')}")
         else:
             data = result["data"]
             source = result.get("source", "unknown")
 
             if source == "fallback":
-                st.warning("⚠️ Network Traffic Threshold Reached: Loading secure internal backup layout framework.")
+                st.warning("⚠️ AI unavailable. Showing offline template.")
             elif source == "offline":
-                st.info("📴 Offline Node Active: Displaying local validation fallback rules matrices.")
+                st.info("📴 Offline mode active.")
 
             urgency = data.get("urgency_level", "medium")
             urgency_class = f"urgency-{urgency}"
 
             st.markdown(f"<div class='{urgency_class}' style='padding-left:12px; margin-bottom:16px;'>", unsafe_allow_html=True)
-            st.markdown(f"**📋 System Mapping Target: {data.get('doc_type', 'Document Notice')}**")
+            st.markdown(f"**📋 {data.get('doc_type', 'Document')}**")
             st.markdown(f"<div class='big-font'><b>{data.get('comfort_message', '')}</b></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='big-font'>{data.get('summary', '')}</div>", unsafe_allow_html=True)
 
@@ -720,7 +747,7 @@ with col2:
                 st.markdown(st.session_state.audio_html, unsafe_allow_html=True)
 
             st.markdown("---")
-            st.markdown(f"### ✅ {db['output_hdr']}")
+            st.markdown(f"### ✅ Steps to take")
             actions = data.get("actions", [])
             for action in actions:
                 step = action.get("step_number", 0)
@@ -758,13 +785,13 @@ with col2:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # RESPONSIBLE AI - GATEWAY SYSTEM CONTROL ENTRY INTERFACE PANEL
+            # FAMILY NOTIFICATION GATEWAY
             st.markdown("---")
             st.markdown("<div class='gateway-box'>", unsafe_allow_html=True)
             st.subheader(db["loop_title"])
             st.warning(db["loop_desc"])
 
-            pin = st.text_input("🔑 Enter Verification Code:", type="password", key="pin_input")
+            pin = st.text_input("🔑 PIN:", type="password", key="pin_input")
 
             if pin:
                 if verify_pin(pin):
@@ -785,32 +812,30 @@ Deadline: {data.get('deadline', 'None')}
                         sent_methods = []
                         if notify_result.get("line"): sent_methods.append("LINE")
                         if notify_result.get("email"): sent_methods.append("Email")
-                        st.success(f"📲 Sent via: {', '.join(sent_methods) if sent_methods else 'Simulation Node'}")
+                        st.success(f"📲 Sent via: {', '.join(sent_methods) if sent_methods else 'Demo'}")
 
                     if st.session_state.last_doc_id:
                         try:
                             st.session_state.db.mark_notified(st.session_state.last_doc_id)
                         except Exception:
                             pass
-                        # ✅ Modern toast with legacy fallback
                         try:
                             st.toast("🎉 Sent to family!", icon="🎉")
                         except AttributeError:
-                            st.balloons()   # safe for older Streamlit
+                            st.balloons()
                 else:
                     st.error(db["wrong_pin"])
 
             st.markdown("</div>", unsafe_allow_html=True)
     else:
-        st.info("👈 Paste a document or upload a photo and click process to begin.")
+        st.info("👈 Paste a document or upload a photo and click the button.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div class='sakura-divider'>🌸 🌺 🌸 🌺 🌸 🌺 🌸</div>", unsafe_allow_html=True)
-
 st.markdown("""
 <div style="text-align:center; color:#888; font-size:12px; padding:20px;">
     🌸 Sakura Assist v2.5 | Built for USAII Global Hackathon 2026<br>
-    Accessibility First • Privacy Protected • Society 5.0 Compliant Deployment Framework
+    Accessibility First • Privacy Protected • Society 5.0 Compliant
 </div>
 """, unsafe_allow_html=True)
