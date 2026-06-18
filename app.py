@@ -41,7 +41,7 @@ try:
 except ImportError:
     pass
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6IYlsNkvkpNMjbvIWKKKZSOSaeX_hM7NV_Cc7Cj8hzpAg")
 _DEFAULT_PIN_HASH = hashlib.sha256("2026".encode()).hexdigest()
 FAMILY_PIN_HASH = os.getenv("FAMILY_PIN_HASH", _DEFAULT_PIN_HASH)
 
