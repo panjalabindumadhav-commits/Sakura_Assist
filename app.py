@@ -41,7 +41,12 @@ try:
 except ImportError:
     pass
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6IYlsNkvkpNMjbvIWKKKZSOSaeX_hM7NV_Cc7Cj8hzpAg")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    try:
+        GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        GEMINI_API_KEY = ""
 _DEFAULT_PIN_HASH = hashlib.sha256("2026".encode()).hexdigest()
 FAMILY_PIN_HASH = os.getenv("FAMILY_PIN_HASH", _DEFAULT_PIN_HASH)
 
@@ -137,8 +142,11 @@ def get_db():
 st.markdown(
     """
     <style>
-    .stApp, [data-testid="stSidebar"] {
-        background-color: #121214 !important;
+    .stApp {
+        background-color: #FFF0F5 !important;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #FFE4EF !important;
     }
     .stTextArea textarea, .stTextInput input {
         font-size: 18px !important;
@@ -507,7 +515,7 @@ with st.sidebar:
         "extra_large": "font-size: 24px !important;"
     }
     st.markdown(
-        f"<style>.big-font {{{size_css.get(st.session_state.font_size, '')}}}</style>",
+        f"<style>.big-font, .stMarkdown, .stMarkdown p, .element-container p, label, .stText span {{ {size_css.get(st.session_state.font_size, '')} }}</style>",
         unsafe_allow_html=True
     )
 
