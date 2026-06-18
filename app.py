@@ -15,8 +15,7 @@ import streamlit as st
 # 🔥 MUST be first Streamlit command
 st.set_page_config(
     page_title="Sakura Assist 🌸 v2.5",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 from datetime import datetime
@@ -37,7 +36,7 @@ try:
     load_dotenv()
 except ImportError:
     pass
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6LSuA0OdYPHLi48lPwykgXJJSxaYB37lqbO5pXt7pdDag")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6I1vVt0083y77pnxfQZdKE59Sdd7Q_5bbLEPBvmphXmxA")
 _DEFAULT_PIN_HASH = hashlib.sha256("2026".encode()).hexdigest()
 FAMILY_PIN_HASH = os.getenv("FAMILY_PIN_HASH", _DEFAULT_PIN_HASH)
 
@@ -120,7 +119,35 @@ def get_db():
 # ============================================================
 # COMPLIANCE INTERCEPTOR (PRIVACY PROTECTION LAYER)
 # ============================================================
-class PIIGuard:
+# Force clean dark theme and override stubborn text/label sizes
+st.markdown(
+    """
+    <style>
+    /* 1. Change main app background away from pink to clean slate dark */
+    .stApp, [data-testid="stSidebar"] {
+        background-color: #121214 !important;
+    }
+    
+    /* 2. Scale up all standard input text area font sizes */
+    .stTextArea textarea, .stTextInput input {
+        font-size: 18px !important;
+    }
+    
+    /* 3. Force sidebar labels and paragraph descriptions to be larger */
+    label, p, .stMarkdown p {
+        font-size: 18px !important;
+    }
+    
+    /* 4. Increase subheader text sizes */
+    h3, [data-testid="stSubheader"] {
+        font-size: 24px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+    )
+
+    class PIIGuard: 
     PATTERNS = {
         'my_number': re.compile(r'\b\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b'),
         'phone': re.compile(r'\b(0\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{4})\b'),
