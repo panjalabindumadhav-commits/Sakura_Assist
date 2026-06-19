@@ -343,14 +343,21 @@ except ImportError:
     GENAI_AVAILABLE = False
 
 class SakuraTranslator:
+    # Try models in order if one is deprecated/unavailable — newest stable GA model first
+    MODEL_CANDIDATES = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+
     def __init__(self, key_override=""):
         active_key = key_override if key_override else GEMINI_API_KEY
+        self.available = False
+        self.model = None
+        self.model_name = None
         if GENAI_AVAILABLE and active_key:
             genai.configure(api_key=active_key)
-            self.model = genai.GenerativeModel("gemini-2.0-flash")
+            # Don't test with a real call here (costs quota) — just set up the first candidate.
+            # process_text() will retry with the next candidate if this one fails.
+            self.model_name = self.MODEL_CANDIDATES[0]
+            self.model = genai.GenerativeModel(self.model_name)
             self.available = True
-        else:
-            self.available = False
 
     def process_text(self, text: str, lang: str, prefecture: str):
         if not self.available:
@@ -384,23 +391,35 @@ Prefecture context: {prefecture}
 Document:
 {safe_text}
 """
-        try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json"
+        last_error = None
+        # Try the current model, then fall through remaining candidates if it's deprecated/unavailable
+        candidates_to_try = [self.model_name] + [m for m in self.MODEL_CANDIDATES if m != self.model_name]
+        for model_name in candidates_to_try:
+            try:
+                model = self.model if model_name == self.model_name else genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        response_mime_type="application/json"
+                    )
                 )
-            )
-            data = json.loads(response.text)
-            return {"success": True, "data": data, "source": "ai"}
-        except Exception as e:
-            fallback = get_fallback(text)
-            return {
-                "success": True,
-                "data": format_fallback(fallback, lang),
-                "source": "fallback",
-                "error": str(e)
-            }
+                data = json.loads(response.text)
+                # Remember which model worked so next call uses it directly
+                if model_name != self.model_name:
+                    self.model_name = model_name
+                    self.model = model
+                return {"success": True, "data": data, "source": "ai"}
+            except Exception as e:
+                last_error = e
+                continue
+
+        fallback = get_fallback(text)
+        return {
+            "success": True,
+            "data": format_fallback(fallback, lang),
+            "source": "fallback",
+            "error": str(last_error)
+        }
 
     def process_image(self, image_bytes, mime_type, lang: str, prefecture: str):
         if not self.available:
@@ -411,18 +430,27 @@ Read the text, then respond STRICTLY as JSON with the same schema as above.
 Translate into: {lang}
 Prefecture: {prefecture}
 """
-        try:
-            image_part = {"mime_type": mime_type, "data": image_bytes}
-            response = self.model.generate_content(
-                [prompt, image_part],
-                generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json"
+        last_error = None
+        image_part = {"mime_type": mime_type, "data": image_bytes}
+        candidates_to_try = [self.model_name] + [m for m in self.MODEL_CANDIDATES if m != self.model_name]
+        for model_name in candidates_to_try:
+            try:
+                model = self.model if model_name == self.model_name else genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    [prompt, image_part],
+                    generation_config=genai.types.GenerationConfig(
+                        response_mime_type="application/json"
+                    )
                 )
-            )
-            data = json.loads(response.text)
-            return {"success": True, "data": data, "source": "ai-vision"}
-        except Exception as e:
-            return {"success": False, "error": str(e), "source": "error"}
+                data = json.loads(response.text)
+                if model_name != self.model_name:
+                    self.model_name = model_name
+                    self.model = model
+                return {"success": True, "data": data, "source": "ai-vision"}
+            except Exception as e:
+                last_error = e
+                continue
+        return {"success": False, "error": str(last_error), "source": "error"}
 
 # ============================================================
 # UI STYLING
@@ -722,15 +750,32 @@ with col2:
     if st.session_state.last_result:
         result = st.session_state.last_result
         if not result["success"]:
-            st.error(f"❌ Error: {result.get('error', 'Unknown error.')}")
+            st.markdown("""
+            <div style="background:#FFF0F5; padding:20px; border-radius:14px; border-left:5px solid #B83B5E; margin-bottom:10px;">
+                <span style="font-size:22px;">🌸</span>
+                <b style="color:#B83B5E; font-size:18px;"> Sakura is resting for a moment</b>
+                <div class="big-font" style="margin-top:8px; color:#555;">
+                    The AI helper is taking a short break. Please try again in a minute,
+                    or use the offline guide below for now.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
             data = result["data"]
             source = result.get("source", "unknown")
 
             if source == "fallback":
-                st.warning("⚠️ AI unavailable. Showing offline template.")
+                st.markdown("""
+                <div style="background:#FFF8E1; padding:14px 18px; border-radius:14px; border-left:5px solid #FBC02D; margin-bottom:14px;">
+                    🌸 <b>Using our trusted offline guide</b> — Sakura AI is briefly busy, so here's a reliable starting explanation.
+                </div>
+                """, unsafe_allow_html=True)
             elif source == "offline":
-                st.info("📴 Offline mode active.")
+                st.markdown("""
+                <div style="background:#E8F5E9; padding:14px 18px; border-radius:14px; border-left:5px solid #2E7D32; margin-bottom:14px;">
+                    📴 <b>Offline helper active</b> — showing our built-in guide for this type of letter.
+                </div>
+                """, unsafe_allow_html=True)
 
             urgency = data.get("urgency_level", "medium")
             urgency_class = f"urgency-{urgency}"
