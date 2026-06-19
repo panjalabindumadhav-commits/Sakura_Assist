@@ -267,7 +267,7 @@ class FamilyNotifier:
         return results
 
 # ============================================================
-# GEMINI TRANSLATOR — gemini-3.5-flash PRIMARY
+# GEMINI TRANSLATOR
 # ============================================================
 try:
     import google.generativeai as genai
@@ -276,22 +276,19 @@ except ImportError:
     GENAI_AVAILABLE = False
 
 class SakuraTranslator:
-    # ✅ Confirmed working API model strings (June 2026)
     MODEL_CANDIDATES = [
-        "gemini-3.5-flash",      # Primary — latest GA model
-        "gemini-3.1-flash-lite", # Fallback 1
-        "gemini-3.1-flash",      # Fallback 2
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash",
     ]
 
     def __init__(self, key_override=""):
         active_key = key_override or GEMINI_API_KEY
         self.available = False
-        self.model = None
         self.model_name = None
         if GENAI_AVAILABLE and active_key:
             genai.configure(api_key=active_key)
             self.model_name = self.MODEL_CANDIDATES[0]
-            self.model = genai.GenerativeModel(self.model_name)
             self.available = True
 
     def _make_prompt(self, lang, prefecture, safe_text):
@@ -337,7 +334,6 @@ Document:
                     generation_config=genai.types.GenerationConfig(response_mime_type="application/json")
                 )
                 data = json.loads(response.text)
-                self.model_name = model_name
                 return {"success": True, "data": data, "source": "ai", "model": model_name}
             except Exception as e:
                 last_error = e
@@ -373,22 +369,38 @@ Prefecture: {prefecture}
         return {"success": False, "error": str(last_error), "source": "error"}
 
 # ============================================================
-# STYLING
+# STYLING — THE REAL FIX: force #1A1A1A on EVERY element
 # ============================================================
 st.markdown("""
 <style>
 @media (prefers-reduced-motion: reduce) { .petal { animation: none !important; display: none !important; } }
+
+/* Force dark text on EVERYTHING — this is the core fix */
+html, body, [class*="css"], .stApp, .stMarkdown,
+div, p, span, li, td, th, label, h1, h2, h3, h4, h5, h6,
+.element-container, .block-container, .stText {
+    color: #1A1A1A !important;
+}
+
 .stApp { background-color: #FFF0F5 !important; }
 [data-testid="stSidebar"] { background-color: #FFE4EF !important; }
-.stTextArea textarea, .stTextInput input, textarea, input[type="text"], input[type="password"] {
+[data-testid="stSidebar"] * { color: #1A1A1A !important; }
+
+/* Inputs always white with dark text */
+.stTextArea textarea,
+.stTextInput input,
+textarea,
+input[type="text"],
+input[type="password"] {
     font-size: 18px !important;
     color: #1A1A1A !important;
+    -webkit-text-fill-color: #1A1A1A !important;
     background-color: #FFFFFF !important;
     border: 1px solid #E0A0B5 !important;
-    -webkit-text-fill-color: #1A1A1A !important;
 }
-.main-title { font-size: clamp(28px,4vw,40px) !important; font-weight:900; color:#B83B5E; text-align:center; }
-.sync-text { font-size:13px; color:#2E7D32; font-weight:600; margin-bottom:20px; text-align:center; }
+
+.main-title { font-size: clamp(28px,4vw,40px) !important; font-weight:900; color:#B83B5E !important; text-align:center; }
+.sync-text { font-size:13px; color:#2E7D32 !important; font-weight:600; margin-bottom:20px; text-align:center; }
 .card-grandma { background:#FFF5F6; padding:clamp(16px,2vw,28px); border-radius:20px; border-top:5px solid #B83B5E; box-shadow:0 8px 24px rgba(184,59,94,0.12); }
 .card-action { background:#FAFAFA; padding:clamp(16px,2vw,28px); border-radius:20px; border-top:5px solid #6C5CE7; box-shadow:0 8px 24px rgba(108,92,231,0.10); }
 .gateway-box { background:linear-gradient(135deg,#FFFDE7,#FFF8E1); padding:20px; border-radius:14px; border:1.5px dashed #FBC02D; margin-top:20px; }
@@ -396,10 +408,11 @@ st.markdown("""
 .urgency-medium { border-left:6px solid #F9A825; }
 .urgency-high { border-left:6px solid #E65100; }
 .urgency-critical { border-left:6px solid #C62828; }
-.big-font { font-size:clamp(15px,1.2vw,18px) !important; line-height:1.8; color:#1A1A1A; }
+.big-font { font-size:clamp(15px,1.2vw,18px) !important; line-height:1.8; color:#1A1A1A !important; }
 .sakura-divider { text-align:center; font-size:22px; letter-spacing:10px; opacity:0.5; margin:10px 0 20px 0; }
 .touch-btn button { min-height:48px; font-size:16px !important; }
-.history-card { background:white; padding:12px; border-radius:12px; margin-bottom:8px; border:1px solid #eee; }
+.history-card { background:white; padding:12px; border-radius:12px; margin-bottom:8px; border:1px solid #eee; color:#1A1A1A !important; }
+
 .petal { position:fixed; top:-40px; font-size:18px; opacity:0.5; animation:fall linear infinite; pointer-events:none; z-index:9999; }
 @keyframes fall {
     0%   { transform:translateY(-40px) rotate(0deg) translateX(0px); opacity:0.6; }
@@ -595,7 +608,7 @@ with col2:
                     except Exception:
                         st.session_state.last_doc_id = 1
 
-                # TTS — full text, autoplay
+                # TTS — full text, autoplay, no cutoff
                 st.session_state.audio_html = None
                 if ENABLE_TTS and result.get("success"):
                     try:
@@ -606,11 +619,13 @@ with col2:
                         deadline = d.get("deadline")
                         if deadline and str(deadline).lower() != "null":
                             parts.append(f"期限は {deadline} です。" if is_jp else f"The deadline is {deadline}.")
-                        for a in d.get("actions",[]):
-                            task = a.get("task","")
-                            step = a.get("step_number","")
-                            if task:
-                                parts.append(f"{step}番目: {task}" if is_jp else f"Step {step}: {task}")
+                        if d.get("actions"):
+                            parts.append("やることは次の通りです。" if is_jp else "Here are the steps to take.")
+                            for a in d.get("actions",[]):
+                                task = a.get("task","")
+                                step = a.get("step_number","")
+                                if task:
+                                    parts.append(f"{step}番目: {task}" if is_jp else f"Step {step}: {task}")
                         tts_text = " ".join(p for p in parts if p).strip()
                         tts = gTTS(text=tts_text, lang="ja" if is_jp else "en", slow=True)
                         mp3_fp = io.BytesIO()
@@ -626,32 +641,36 @@ with col2:
     if st.session_state.last_result:
         result = st.session_state.last_result
         if not result["success"]:
-            st.markdown('<div style="background:#FFF0F5;padding:20px;border-radius:14px;border-left:5px solid #B83B5E;"><b>🌸 Sakura is resting for a moment</b><br>Please try again in a minute.</div>', unsafe_allow_html=True)
+            st.markdown('<div style="background:#FFF0F5;padding:20px;border-radius:14px;border-left:5px solid #B83B5E;color:#1A1A1A !important;"><b>🌸 Sakura is resting for a moment</b><br>Please try again in a minute.</div>', unsafe_allow_html=True)
         else:
             data = result["data"]
             source = result.get("source","unknown")
 
             if source == "fallback":
-                st.markdown('<div style="background:#FFF8E1;padding:12px 16px;border-radius:12px;border-left:5px solid #FBC02D;margin-bottom:12px;">🌸 <b>Using offline guide</b> — AI is briefly busy.</div>', unsafe_allow_html=True)
+                st.markdown('<div style="background:#FFF8E1;padding:12px 16px;border-radius:12px;border-left:5px solid #FBC02D;margin-bottom:12px;color:#1A1A1A !important;">🌸 <b>Using offline guide</b> — AI is briefly busy.</div>', unsafe_allow_html=True)
             elif source == "offline":
-                st.markdown('<div style="background:#E8F5E9;padding:12px 16px;border-radius:12px;border-left:5px solid #2E7D32;margin-bottom:12px;">📴 <b>Offline helper active</b></div>', unsafe_allow_html=True)
+                st.markdown('<div style="background:#E8F5E9;padding:12px 16px;border-radius:12px;border-left:5px solid #2E7D32;margin-bottom:12px;color:#1A1A1A !important;">📴 <b>Offline helper active</b></div>', unsafe_allow_html=True)
 
             urgency = data.get("urgency_level","medium")
-            st.markdown(f"<div class='urgency-{urgency}' style='padding-left:12px;margin-bottom:16px;'>", unsafe_allow_html=True)
-            st.markdown(f"**📋 {data.get('doc_type','Document')}**")
-            st.markdown(f"<div class='big-font'><b>{data.get('comfort_message','')}</b></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='big-font'>{data.get('summary','')}</div>", unsafe_allow_html=True)
+
+            # THE FIX: every result div has explicit color:#1A1A1A
+            st.markdown(f'<div class="urgency-{urgency}" style="padding-left:12px;margin-bottom:16px;">', unsafe_allow_html=True)
+            st.markdown(f'<p style="color:#1A1A1A !important;font-weight:bold;font-size:18px;">📋 {data.get("doc_type","Document")}</p>', unsafe_allow_html=True)
+            st.markdown(f'<p style="color:#1A1A1A !important;font-size:18px;line-height:1.8;font-weight:bold;">{data.get("comfort_message","")}</p>', unsafe_allow_html=True)
+            st.markdown(f'<p style="color:#1A1A1A !important;font-size:18px;line-height:1.8;">{data.get("summary","")}</p>', unsafe_allow_html=True)
+
             deadline = data.get("deadline")
             if deadline and str(deadline).lower() != "null":
-                st.markdown(f'<div style="background:#FFF3E0;padding:10px 14px;border-radius:10px;margin:10px 0;border-left:4px solid #EF6C00;"><b>⏰ {db["deadline"]}:</b> {deadline}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:#FFF3E0;padding:10px 14px;border-radius:10px;margin:10px 0;border-left:4px solid #EF6C00;color:#1A1A1A !important;"><b>⏰ {db["deadline"]}:</b> {deadline}</div>', unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
             if st.session_state.audio_html:
-                st.markdown(f"<b>{db['tts_label']}</b>", unsafe_allow_html=True)
+                st.markdown(f'<p style="color:#1A1A1A !important;font-weight:bold;">{db["tts_label"]}</p>', unsafe_allow_html=True)
                 st.markdown(st.session_state.audio_html, unsafe_allow_html=True)
 
             st.markdown("---")
-            st.markdown("### ✅ Steps to take")
+            st.markdown('<p style="color:#1A1A1A !important;font-size:20px;font-weight:bold;">✅ Steps to take</p>', unsafe_allow_html=True)
+
             for action in data.get("actions",[]):
                 step = action.get("step_number",0)
                 task = action.get("task","")
@@ -659,7 +678,7 @@ with col2:
                 ct = action.get("contact")
                 dl_str = f" — ⏰ {dl}" if dl and str(dl).lower()!="null" else ""
                 ct_str = f"<br>📞 {ct}" if ct else ""
-                st.markdown(f'<div style="background:white;padding:14px;border-radius:12px;margin-bottom:10px;border:1px solid #E0E0E0;box-shadow:0 2px 8px rgba(0,0,0,0.04);"><span style="background:#B83B5E;color:white;padding:4px 10px;border-radius:20px;font-size:13px;font-weight:bold;">Step {step}</span><div class="big-font" style="margin-top:8px;">{task}{dl_str}{ct_str}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:white;padding:14px;border-radius:12px;margin-bottom:10px;border:1px solid #E0E0E0;box-shadow:0 2px 8px rgba(0,0,0,0.04);"><span style="background:#B83B5E;color:white;padding:4px 10px;border-radius:20px;font-size:13px;font-weight:bold;">Step {step}</span><p style="color:#1A1A1A !important;font-size:17px;line-height:1.8;margin-top:8px;">{task}{dl_str}{ct_str}</p></div>', unsafe_allow_html=True)
 
             mc = st.columns(3)
             with mc[0]:
@@ -670,9 +689,9 @@ with col2:
                 if data.get("penalty_if_missed"): st.metric("⚠️ Risk","High" if urgency in ["high","critical"] else "Low")
 
             if data.get("required_documents"):
-                st.markdown(f"**📎 {db['docs_needed']}:** {', '.join(data['required_documents'])}")
+                st.markdown(f'<p style="color:#1A1A1A !important;"><b>📎 {db["docs_needed"]}:</b> {", ".join(data["required_documents"])}</p>', unsafe_allow_html=True)
             if data.get("penalty_if_missed"):
-                st.markdown(f'<div style="background:#FFEBEE;padding:10px 14px;border-radius:10px;margin-top:10px;color:#C62828;"><b>⚠️ {db["penalty"]}:</b> {data["penalty_if_missed"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:#FFEBEE;padding:10px 14px;border-radius:10px;margin-top:10px;color:#C62828 !important;"><b>⚠️ {db["penalty"]}:</b> {data["penalty_if_missed"]}</div>', unsafe_allow_html=True)
 
             st.markdown("---")
             st.markdown("<div class='gateway-box'>", unsafe_allow_html=True)
