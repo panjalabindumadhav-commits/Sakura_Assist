@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ============================================================
 # 🔥 MUST be first Streamlit command
@@ -519,6 +520,30 @@ Document:
                 continue
         
         return {"success": False, "error": str(last_error), "source": "error"}
+    
+    def process_audio(self, audio_bytes: bytes, mime_type: str, lang: str, prefecture: str) -> dict:
+        """Process audio voice memo via Gemini REST API."""
+        if not self.available:
+            return {"success": False, "error": "AI not configured", "source": "offline"}
+        
+        if len(audio_bytes) > 20 * 1024 * 1024:
+            return {"success": False, "error": "Audio too large (max 20MB)", "source": "error"}
+        
+        b64_audio = base64.b64encode(audio_bytes).decode()
+        prompt = self._build_prompt(lang, prefecture, "[Voice message uploaded — please transcribe and analyze]")
+        
+        last_error = None
+        for model in self.MODELS:
+            try:
+                data = self._generate(model, [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime_type, "data": b64_audio}}
+                ], json_mode=True)
+                return {"success": True, "data": data, "source": "ai-audio"}
+            except Exception as e:
+                last_error = e
+                continue
+        return {"success": False, "error": str(last_error), "source": "error"}
 
 # ============================================================
 # TTS HELPER
@@ -546,6 +571,30 @@ def generate_tts_audio(text: str, lang_code: str) -> Optional[str]:
         return base64.b64encode(mp3_fp.read()).decode()
     except ImportError:
         return None
+    except Exception:
+        return None
+
+# ============================================================
+# QR CODE HELPER
+# ============================================================
+try:
+    import qrcode
+    QR_AVAILABLE = True
+except ImportError:
+    QR_AVAILABLE = False
+
+def generate_qr_code(data: str) -> Optional[str]:
+    """Generate base64 PNG QR code, or None if qrcode not installed."""
+    if not QR_AVAILABLE:
+        return None
+    try:
+        qr = qrcode.QRCode(box_size=4, border=2)
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="#B83B5E", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
     except Exception:
         return None
 
@@ -586,6 +635,16 @@ st.markdown(
     }
     h3, [data-testid="stSubheader"] {
         font-size: 24px !important;
+    }
+    /* Critical alert animation */
+    .critical-alert {
+        animation: pulse-red 2s infinite;
+        margin-bottom: 16px;
+    }
+    @keyframes pulse-red {
+        0% { box-shadow: 0 0 0 0 rgba(198, 40, 40, 0.4); }
+        70% { box-shadow: 0 0 0 20px rgba(198, 40, 40, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(198, 40, 40, 0); }
     }
     </style>
     """,
@@ -711,6 +770,8 @@ if 'audio_html' not in st.session_state:
     st.session_state.audio_html = None
 if 'font_size' not in st.session_state:
     st.session_state.font_size = "normal"
+if 'user_input_value' not in st.session_state:
+    st.session_state.user_input_value = ""
 
 # ============================================================
 # SIDEBAR
@@ -816,7 +877,7 @@ text_db = {
         "or_upload": "📷 Or upload a photo of the letter:",
         "btn": "✨ Translate & Explain",
         "output_hdr": "🤖 Here is what the letter means",
-        "validation_err": "❌ Please paste some text or upload a photo first.",
+        "validation_err": "❌ Please paste some text, upload a photo, or record a voice message first.",
         "api_err": "⚠️ AI key not configured. Please enter your Gemini API key in the sidebar.",
         "loop_title": "🛡️ Send to Family",
         "loop_desc": "Enter your family PIN to send this summary to their phone.",
@@ -839,7 +900,7 @@ text_db = {
         "or_upload": "📷 手紙 の 写真 を アップロード:",
         "btn": "✨ さくらAI で かんたんに",
         "output_hdr": "🤖 てがみ の いみ",
-        "validation_err": "❌ もじ または 写真 を いれてください。",
+        "validation_err": "❌ もじ、写真、またはこえをいれてください。",
         "api_err": "⚠️ AIの キー が みつかりません。サイドバーにキーを入力してください。",
         "loop_title": "🛡️ かぞく に おくる",
         "loop_desc": "かぞく の ばんごう を いれてください。",
@@ -870,18 +931,40 @@ with col1:
     st.markdown("<div class='card-grandma'>", unsafe_allow_html=True)
     st.subheader(db["profile"])
 
+    # Demo sample buttons
+    st.markdown("#### 🎯 Try a Sample")
+    demo_cols = st.columns(3)
+    demo_samples = {
+        "💰 Pension": "PENSION OFFICE NAGANO: Annual pension review 2026. Submit income certificate (所得証明書) by July 15, 2026. Bring pension book and My Number card.",
+        "🏠 Tax": "CITY TAX NOTICE: 2026 resident tax is ¥48,500. Due June 30, 2026. Late payment incurs penalty fees.",
+        "🏥 Medical": "HEALTH INSURANCE: Your card expires July 31, 2026. Renew at city hall with proof of address and ID."
+    }
+
+    def set_demo_text(text):
+        st.session_state.user_input_value = text
+
+    for i, (label, text) in enumerate(demo_samples.items()):
+        demo_cols[i].button(label, on_click=set_demo_text, args=(text,), key=f"demo_{i}", use_container_width=True)
+
+    # Text input (controlled by session_state for demo buttons)
     user_input = st.text_area(
         db["input_label"], 
-        value="", 
         height=180,
-        placeholder=db.get("placeholder", "")
+        placeholder=db.get("placeholder", ""),
+        key="user_input_value"
     )
 
+    # Image upload
     uploaded_image = None
     if ENABLE_IMAGE_OCR:
         uploaded_image = st.file_uploader(db["or_upload"], type=["jpg", "jpeg", "png"])
         if uploaded_image:
             st.image(uploaded_image, use_container_width=True, caption="📷 Uploaded document")
+
+    # Voice memo
+    audio_input = st.audio_input("🎤 Or record a voice message reading the letter")
+    if audio_input:
+        st.audio(audio_input)
 
     st.markdown("<div class='touch-btn'>", unsafe_allow_html=True)
     process_trigger = st.button(db["btn"], use_container_width=True, type="primary")
@@ -898,7 +981,8 @@ with col2:
     st.subheader(db["output_hdr"])
 
     if process_trigger:
-        if not user_input.strip() and not uploaded_image:
+        has_input = bool(user_input.strip()) or uploaded_image is not None or audio_input is not None
+        if not has_input:
             st.error(db["validation_err"])
             st.session_state.last_result = None
             st.session_state.audio_html = None
@@ -908,8 +992,14 @@ with col2:
             st.session_state.audio_html = None
         else:
             with st.spinner("🌸 Sakura AI is reading the letter..."):
-                # Process based on input type (image takes priority)
-                if uploaded_image:
+                # Priority: Audio > Image > Text
+                if audio_input:
+                    audio_bytes = audio_input.getvalue()
+                    mime_type = audio_input.type or "audio/wav"
+                    result = st.session_state.translator.process_audio(
+                        audio_bytes, mime_type, lang, selected_prefecture
+                    )
+                elif uploaded_image:
                     img_bytes = uploaded_image.getvalue()
                     mime_type = uploaded_image.type or "image/jpeg"
                     result = st.session_state.translator.process_image(
@@ -926,7 +1016,7 @@ with col2:
                 # Save to DB on success
                 if result.get("success"):
                     data = result["data"]
-                    safe_raw = pii_guard.redact(user_input[:500]) if user_input else "[IMAGE]"
+                    safe_raw = pii_guard.redact(user_input[:500]) if user_input else "[IMAGE/AUDIO]"
                     
                     try:
                         doc_id = st.session_state.db.save(
@@ -1025,6 +1115,16 @@ with col2:
             urgency = data.get("urgency_level", "medium")
             urgency_class = f"urgency-{urgency}"
 
+            # CRITICAL ALERT ANIMATION
+            if urgency == "critical":
+                st.markdown("""
+                <div class="critical-alert" style="background:#FFEBEE; padding:16px; border-radius:12px; border:2px solid #C62828; text-align:center;">
+                    <span style="font-size:32px;">🚨</span><br>
+                    <b style="color:#C62828; font-size:20px;">CRITICAL — Please act immediately!</b><br>
+                    <span style="color:#555;">Contact your family or city hall today.</span>
+                </div>
+                """, unsafe_allow_html=True)
+
             st.markdown(f"<div class='{urgency_class}' style='padding-left:12px; margin-bottom:16px;'>", unsafe_allow_html=True)
             st.markdown(f"**📋 {data.get('doc_type', 'Document')}**")
             st.markdown(f"<div class='big-font'><b>{data.get('comfort_message', '')}</b></div>", unsafe_allow_html=True)
@@ -1089,6 +1189,45 @@ with col2:
                 </div>
                 """, unsafe_allow_html=True)
 
+            # QR CODE SHARING
+            qr_payload = json.dumps({
+                "doc_type": data.get("doc_type"),
+                "summary": data.get("summary"),
+                "deadline": data.get("deadline"),
+                "actions": [a.get("task") for a in actions if a.get("task")]
+            }, ensure_ascii=False)
+            qr_b64 = generate_qr_code(qr_payload)
+            if qr_b64:
+                st.markdown("---")
+                st.markdown("### 📱 Share with Family")
+                st.markdown(
+                    f'<div style="text-align:center; background:white; padding:16px; border-radius:16px; border:2px solid #B83B5E;">'
+                    f'<img src="data:image/png;base64,{qr_b64}" width="180">'
+                    f'<p style="font-size:12px; color:#666; margin-top:8px;">Scan to view summary</p></div>',
+                    unsafe_allow_html=True
+                )
+
+            # DOWNLOAD REPORT
+            report = {
+                "document_type": data.get("doc_type"),
+                "summary": data.get("summary"),
+                "comfort_message": data.get("comfort_message"),
+                "urgency": data.get("urgency_level"),
+                "deadline": data.get("deadline"),
+                "actions": data.get("actions"),
+                "department": data.get("department"),
+                "contact": data.get("contact_phone"),
+                "generated_at": datetime.now().isoformat()
+            }
+            report_json = json.dumps(report, ensure_ascii=False, indent=2)
+            st.download_button(
+                label="📥 Save Report",
+                data=report_json,
+                file_name=f"sakura_report_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+
             # FAMILY NOTIFICATION GATEWAY
             st.markdown("---")
             st.markdown("<div class='gateway-box'>", unsafe_allow_html=True)
@@ -1129,6 +1268,18 @@ Deadline: {data.get('deadline', 'None')}
                     
                     try:
                         st.toast("🎉 Sent to family!", icon="🎉")
+                        # Confetti burst
+                        components.html("""
+                        <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+                        <script>
+                            confetti({
+                                particleCount: 150,
+                                spread: 70,
+                                origin: {y: 0.6},
+                                colors: ['#B83B5E', '#FF69B4', '#FFB6C1', '#6C5CE7']
+                            });
+                        </script>
+                        """, height=0)
                     except Exception:
                         pass
                 else:
@@ -1136,7 +1287,7 @@ Deadline: {data.get('deadline', 'None')}
 
             st.markdown("</div>", unsafe_allow_html=True)
     else:
-        st.info("👈 Paste a document or upload a photo and click the button.")
+        st.info("👈 Paste a document, upload a photo, record your voice, or try a sample and click the button.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
