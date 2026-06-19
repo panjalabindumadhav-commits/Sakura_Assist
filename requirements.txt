@@ -1,9 +1,6 @@
-[theme]
-primaryColor = "#B83B5E"
-backgroundColor = "#FFF0F5"
-secondaryBackgroundColor = "#FFE4EF"
-textColor = "#1A1A1A"
-font = "sans serif"
-
-[server]
-headless = true
+streamlit>=1.32.0
+requests>=2.31.0
+gtts>=2.5.0
+python-dotenv>=1.0.0
+qrcode[pil]>=7.4.2
+Pillow>=10.0.0
