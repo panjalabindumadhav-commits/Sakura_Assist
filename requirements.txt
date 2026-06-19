@@ -1,5 +1,9 @@
-streamlit>=1.28
-python-dotenv>=1.0
-google-generativeai>=0.6.0
-gtts>=2.5
-requests>=2.31
+[theme]
+primaryColor = "#B83B5E"
+backgroundColor = "#FFF0F5"
+secondaryBackgroundColor = "#FFE4EF"
+textColor = "#1A1A1A"
+font = "sans serif"
+
+[server]
+headless = true
