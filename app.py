@@ -40,7 +40,10 @@ if not GEMINI_API_KEY:
         GEMINI_API_KEY = ""
 
 # --- PIN Configuration (PBKDF2 preferred, legacy SHA256 fallback) ---
-FAMILY_PIN_HASH = os.getenv("FAMILY_PIN_HASH", "")
+# Default demo PIN: 2026 (SHA256 legacy hash)
+# For hackathon only — generate a real PBKDF2 hash via the sidebar admin tool for production
+_DEFAULT_PIN_HASH = hashlib.sha256("2026".encode()).hexdigest()
+FAMILY_PIN_HASH = os.getenv("FAMILY_PIN_HASH", _DEFAULT_PIN_HASH)
 FAMILY_PIN_SALT = os.getenv("FAMILY_PIN_SALT", "")
 
 # --- Other Config ---
@@ -1189,13 +1192,17 @@ with col2:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # QR CODE SHARING
-            qr_payload = json.dumps({
-                "doc_type": data.get("doc_type"),
-                "summary": data.get("summary"),
-                "deadline": data.get("deadline"),
-                "actions": [a.get("task") for a in actions if a.get("task")]
-            }, ensure_ascii=False)
+            # QR CODE SHARING (clean text format)
+            qr_lines = [f"🌸 Sakura Assist Alert", f"📋 {data.get('doc_type', 'Document')}"]
+            if data.get('deadline') and str(data.get('deadline')).lower() not in ('null', 'none', ''):
+                qr_lines.append(f"⏰ Deadline: {data['deadline']}")
+            qr_lines.append(f"📝 {data.get('summary', '')}")
+            qr_lines.append("✅ Steps:")
+            for i, a in enumerate(actions, 1):
+                if a.get('task'):
+                    qr_lines.append(f"{i}. {a['task']}")
+            qr_payload = "\n".join(qr_lines)
+            
             qr_b64 = generate_qr_code(qr_payload)
             if qr_b64:
                 st.markdown("---")
